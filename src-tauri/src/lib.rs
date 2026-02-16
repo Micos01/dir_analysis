@@ -43,20 +43,64 @@ struct ProgressPayload {
     status: String,
 }
 
+// CORREÇÃO: Parsing numérico inteligente para bilhões de bytes
 fn parse_size_bytes(s: &[u8]) -> i64 {
     let s = s.trim_ascii();
     if s.is_empty() { return 0; }
 
+    // 1. Separar onde termina o número e onde começa a unidade (ex: GB, MB, B)
+    let mut unit_idx = s.len();
+    for (i, &b) in s.iter().enumerate() {
+        if b.is_ascii_alphabetic() {
+            unit_idx = i;
+            break;
+        }
+    }
+
+    let num_bytes = s[..unit_idx].trim_ascii_end();
+    let unit_bytes = s[unit_idx..].trim_ascii();
+
+    // 2. Determinar o multiplicador
+    let multiplier = if unit_bytes.eq_ignore_ascii_case(b"TB") || unit_bytes.eq_ignore_ascii_case(b"T") {
+        1099511627776.0
+    } else if unit_bytes.eq_ignore_ascii_case(b"GB") || unit_bytes.eq_ignore_ascii_case(b"G") {
+        1073741824.0
+    } else if unit_bytes.eq_ignore_ascii_case(b"MB") || unit_bytes.eq_ignore_ascii_case(b"M") {
+        1048576.0
+    } else if unit_bytes.eq_ignore_ascii_case(b"KB") || unit_bytes.eq_ignore_ascii_case(b"K") {
+        1024.0
+    } else {
+        1.0
+    };
+
+    // 3. Encontrar a posição do ÚLTIMO separador ('.' ou ',') no número
+    let mut last_sep_idx = None;
+    for (i, &b) in num_bytes.iter().enumerate() {
+        if b == b'.' || b == b',' {
+            last_sep_idx = Some(i);
+        }
+    }
+
+    // 4. Descobrir se o último separador é decimal ou de milhares
+    let mut is_decimal = false;
+    if let Some(idx) = last_sep_idx {
+        let chars_after = num_bytes.len() - idx - 1;
+        // Heurística: se não houver exatamente 3 dígitos após o separador, é decimal (ex: 4.5 ou 4.50).
+        if chars_after != 3 {
+            is_decimal = true;
+        }
+    }
+
+    // 5. Fazer o parsing seguro
     let mut num_val: f64 = 0.0;
     let mut decimal_place: f64 = 0.1;
-    let mut in_decimal = false;
-    let mut unit_idx = s.len();
+    let mut passed_decimal = false;
 
-    for (i, &b) in s.iter().enumerate() {
+    for (i, &b) in num_bytes.iter().enumerate() {
         match b {
             b'0'..=b'9' => {
                 let digit = (b - b'0') as f64;
-                if in_decimal {
+                if passed_decimal {
                     num_val += digit * decimal_place;
                     decimal_place *= 0.1;
                 } else {
@@ -64,28 +108,13 @@ fn parse_size_bytes(s: &[u8]) -> i64 {
                 }
             }
             b'.' | b',' => {
-                in_decimal = true;
-            }
-            _ if b.is_ascii_alphabetic() => {
-                unit_idx = i;
-                break;
+                if is_decimal && Some(i) == last_sep_idx {
+                    passed_decimal = true;
+                }
             }
             _ => {}
         }
     }
-
-    let unit = &s[unit_idx..].trim_ascii();
-    let multiplier = if unit.eq_ignore_ascii_case(b"TB") || unit.eq_ignore_ascii_case(b"T") {
-        1099511627776.0
-    } else if unit.eq_ignore_ascii_case(b"GB") || unit.eq_ignore_ascii_case(b"G") {
-        1073741824.0
-    } else if unit.eq_ignore_ascii_case(b"MB") || unit.eq_ignore_ascii_case(b"M") {
-        1048576.0
-    } else if unit.eq_ignore_ascii_case(b"KB") || unit.eq_ignore_ascii_case(b"K") {
-        1024.0
-    } else {
-        1.0
-    };
 
     (num_val * multiplier) as i64
 }
@@ -108,7 +137,6 @@ async fn parse_report(window: Window, report_path: String) -> Result<AnalysisSum
     let db_path_str = db_path.to_str().unwrap().to_string();
 
     let (tx_chan, rx_chan) = mpsc::sync_channel::<Vec<ParseItem>>(100);
-
     let report_path_clone = report_path.clone();
     let window_clone = window.clone();
     
@@ -165,7 +193,7 @@ async fn parse_report(window: Window, report_path: String) -> Result<AnalysisSum
 
                 if batch.len() >= 10000 {
                     let to_send = std::mem::replace(&mut batch, Vec::with_capacity(10000));
-                    if tx_chan.send(to_send).is_err() { return; }
+                    let _ = tx_chan.send(to_send);
                 }
             }
             cursor = line_end + 1;

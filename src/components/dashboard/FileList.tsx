@@ -1,5 +1,6 @@
-import { Search, FileText, Folder, Trash2 } from 'lucide-react';
+import { Search, FileText, Folder, Trash2, Copy } from 'lucide-react';
 import { FileInfo } from '../../types';
+import { copyToClipboard } from '../../utils';
 
 interface FileListProps {
   searchTerm: string;
@@ -7,10 +8,16 @@ interface FileListProps {
   searchResults: FileInfo[];
   currentFiles: FileInfo[];
   addToDiscard: (file: FileInfo) => void;
+  showToast: (msg: string) => void;
 }
 
-export function FileList({ searchTerm, setSearchTerm, searchResults, currentFiles, addToDiscard }: FileListProps) {
+export function FileList({ searchTerm, setSearchTerm, searchResults, currentFiles, addToDiscard, showToast }: FileListProps) {
   const files = searchTerm.length > 2 ? searchResults : currentFiles;
+
+  const handleCopyPath = (path: string) => {
+    copyToClipboard(path);
+    showToast(`Pasta copiada: ${path.split('\\').pop()}`);
+  };
 
   return (
     <section className="flex flex-col gap-4">
@@ -41,7 +48,7 @@ export function FileList({ searchTerm, setSearchTerm, searchResults, currentFile
             </thead>
             <tbody className="divide-y divide-slate-700/30 text-slate-300">
               {files.map((file, i) => (
-                <tr key={i} className="hover:bg-slate-700/20 transition-colors">
+                <tr key={i} className="hover:bg-slate-700/20 transition-colors group">
                   <td className="px-6 py-3">
                     <div className="flex items-center gap-3">
                       <FileText size={16} className="text-slate-500 shrink-0" />
@@ -52,9 +59,14 @@ export function FileList({ searchTerm, setSearchTerm, searchResults, currentFile
                     <span className="font-mono text-xs font-bold text-slate-400">{file.size_str}</span>
                   </td>
                   <td className="px-6 py-3">
-                    <div className="flex items-center gap-2 text-slate-500">
+                    <div 
+                      className="flex items-center gap-2 text-slate-500 hover:text-blue-400 cursor-pointer transition-colors"
+                      onClick={() => handleCopyPath(file.parent_path)}
+                      title="Clique para copiar o caminho da pasta"
+                    >
                       <Folder size={14} className="shrink-0" />
-                      <span className="text-xs truncate max-w-xs">{file.parent_path.split('\\').pop()}</span>
+                      <span className="text-xs truncate max-w-[150px] sm:max-w-xs">{file.parent_path.split('\\').pop()}</span>
+                      <Copy size={10} className="opacity-0 group-hover:opacity-100" />
                     </div>
                   </td>
                   <td className="px-6 py-3 text-center">
@@ -68,11 +80,6 @@ export function FileList({ searchTerm, setSearchTerm, searchResults, currentFile
                   </td>
                 </tr>
               ))}
-              {files.length === 0 && (
-                <tr>
-                  <td colSpan={4} className="px-6 py-12 text-sm italic text-center text-slate-600">Nenhum arquivo encontrado</td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>

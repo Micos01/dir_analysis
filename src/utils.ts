@@ -11,3 +11,13 @@ export const formatTime = (seconds: number) => {
   const secs = seconds % 60;
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 };
+
+export const copyToClipboard = async (text: string) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (err) {
+    console.error('Falha ao copiar: ', err);
+    return false;
+  }
+};

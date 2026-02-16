@@ -1,5 +1,6 @@
-import { ChevronLeft, Folder, ChevronRight, FileText } from 'lucide-react';
+import { ChevronLeft, Folder, ChevronRight, FileText, Copy } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { copyToClipboard } from '../../utils';
 
 interface ExplorerProps {
   currentNavPath: string | null;
@@ -9,6 +10,7 @@ interface ExplorerProps {
   formatBytes: (bytes: number) => string;
   CustomTooltip: any;
   COLORS: string[];
+  showToast: (msg: string) => void;
 }
 
 export function Explorer({ 
@@ -18,8 +20,21 @@ export function Explorer({
   setCurrentNavPath, 
   formatBytes, 
   CustomTooltip,
-  COLORS 
+  COLORS,
+  showToast
 }: ExplorerProps) {
+  
+  const handleItemClick = (item: any) => {
+    const path = item.type === 'dir' ? item.path : currentNavPath;
+    if (path) {
+      copyToClipboard(path);
+      showToast(`Caminho copiado: ${path.split('\\').pop()}`);
+      if (item.type === 'dir') {
+        setCurrentNavPath(item.path);
+      }
+    }
+  };
+
   return (
     <section className="flex flex-col gap-4">
       <div className="flex items-center justify-between px-2">
@@ -30,11 +45,15 @@ export function Explorer({
           >
             <ChevronLeft size={20} />
           </button>
-          <div className="flex items-center gap-2 px-4 py-2 overflow-hidden border bg-slate-900 rounded-xl border-slate-800">
+          <div 
+            className="flex items-center gap-2 px-4 py-2 overflow-hidden border bg-slate-900 rounded-xl border-slate-800 cursor-pointer hover:border-blue-500/50 group"
+            onClick={() => currentNavPath && copyToClipboard(currentNavPath) && showToast("Caminho atual copiado!")}
+          >
             <Folder size={16} className="shrink-0 text-blue-400" />
-            <span className="text-xs font-mono font-medium truncate text-blue-400">
+            <span className="text-xs font-mono font-medium truncate text-blue-400 max-w-[200px] sm:max-w-md">
               {currentNavPath}
             </span>
+            <Copy size={12} className="opacity-0 group-hover:opacity-100 text-slate-500 transition-opacity" />
           </div>
         </div>
         <h3 className="hidden text-sm font-semibold tracking-wide uppercase sm:block text-slate-500">Explorador Hierárquico</h3>
@@ -48,8 +67,8 @@ export function Explorer({
               layout="vertical" 
               margin={{ left: 10, right: 30, top: 0, bottom: 0 }}
               onClick={(data: any) => {
-                if (data && data.activePayload && data.activePayload[0].payload.type === 'dir') {
-                  setCurrentNavPath(data.activePayload[0].payload.path);
+                if (data && data.activePayload) {
+                  handleItemClick(data.activePayload[0].payload);
                 }
               }}
             >
@@ -72,7 +91,7 @@ export function Explorer({
                   <Cell 
                     key={`cell-${index}`} 
                     fill={entry.type === 'files' ? '#64748b' : COLORS[index % COLORS.length]} 
-                    className={entry.type === 'dir' ? 'cursor-pointer hover:opacity-80' : ''}
+                    className="cursor-pointer hover:opacity-80"
                   />
                 ))}
               </Bar>
@@ -88,21 +107,15 @@ export function Explorer({
             {breakdownData.map((item, i) => (
               <div 
                 key={i} 
-                className={`flex items-center gap-4 px-5 py-3 transition-colors border-b border-slate-800/50 last:border-0 ${item.type === 'dir' ? 'cursor-pointer hover:bg-slate-800/50' : ''}`}
-                onClick={() => item.type === 'dir' && setCurrentNavPath(item.path)}
+                className="flex items-center gap-4 px-5 py-3 transition-colors border-b border-slate-800/50 last:border-0 cursor-pointer hover:bg-slate-800/50 group"
+                onClick={() => handleItemClick(item)}
               >
                 {item.type === 'dir' ? <Folder size={16} className="text-blue-500" /> : <FileText size={16} className="text-slate-500" />}
                 <span className="flex-1 text-sm font-medium truncate text-slate-300">{item.name}</span>
                 <span className="text-xs font-mono font-semibold text-slate-500">{formatBytes(item.value)}</span>
-                {item.type === 'dir' && <ChevronRight size={14} className="text-slate-700" />}
+                <Copy size={12} className="opacity-0 group-hover:opacity-100 text-slate-600" />
               </div>
             ))}
-            {breakdownData.length === 0 && (
-              <div className="flex flex-col items-center justify-center h-full gap-2 text-slate-600">
-                <Folder size={32} opacity={0.2} />
-                <span className="text-xs italic">Diretório vazio</span>
-              </div>
-            )}
           </div>
         </div>
       </div>

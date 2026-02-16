@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle2 } from 'lucide-react';
 
 // Types & Utils
 import { FileInfo, DirInfo, AnalysisSummary, ProgressEvent } from "./types";
@@ -66,6 +66,14 @@ function App() {
   const [topFiles, setTopFiles] = useState<FileInfo[]>([]);
   const [searchResults, setSearchResults] = useState<FileInfo[]>([]);
 
+  // Toast State
+  const [toast, setToast] = useState<{msg: string, visible: boolean}>({ msg: "", visible: false });
+
+  const showToast = (msg: string) => {
+    setToast({ msg, visible: true });
+    setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
+  };
+
   useEffect(() => {
     const setupListeners = async () => {
       const unlistenDrop = await listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
@@ -94,8 +102,7 @@ function App() {
       };
     };
 
-    const cleanup = setupListeners();
-    return () => { cleanup.then(f => f && f()); };
+    setupListeners();
   }, []);
 
   useEffect(() => {
@@ -235,6 +242,14 @@ function App() {
         />
       )}
 
+      {/* Toast Notification */}
+      {toast.visible && (
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[5000] flex items-center gap-3 px-6 py-3 bg-slate-800 border border-emerald-500/50 text-emerald-400 rounded-full shadow-2xl shadow-emerald-900/20 animate-in slide-in-from-bottom-4 duration-300">
+          <CheckCircle2 size={18} />
+          <span className="text-sm font-bold">{toast.msg}</span>
+        </div>
+      )}
+
       <Header 
         filePath={filePath} 
         setFilePath={setFilePath} 
@@ -265,7 +280,8 @@ function App() {
             setCurrentNavPath={setCurrentNavPath} 
             formatBytes={formatBytes} 
             CustomTooltip={CustomTooltip} 
-            COLORS={COLORS} 
+            COLORS={COLORS}
+            showToast={showToast}
           />
 
           <ChartsGrid 
@@ -281,6 +297,7 @@ function App() {
             searchResults={searchResults} 
             currentFiles={currentFiles} 
             addToDiscard={addToDiscard} 
+            showToast={showToast}
           />
 
           <DiscardSection 
