@@ -13,37 +13,39 @@ interface FileInfo {
   name: string;
   size_bytes: number;
   size_str: string;
+  parent_path: string;
 }
 
 interface DirInfo {
   path: string;
   size_bytes: number;
   size_str: string;
-  files: FileInfo[];
 }
 
-interface AnalysisResult {
-  directories: DirInfo[];
+interface AnalysisSummary {
   total_size_bytes: number;
-}
-
-interface DiscardFileInfo extends FileInfo {
-  parentPath: string;
+  total_dirs: number;
+  total_files: number;
+  root_path: string;
 }
 
 function App() {
   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658', '#8dd1e1'];
   
   const [filePath, setFilePath] = useState("Arraste o arquivo para a tela");
-  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [summary, setSummary] = useState<AnalysisSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [isDragging, setIsDragging] = useState(false);
-  const [discardList, setDiscardList] = useState<DiscardFileInfo[]>([]);
+  const [discardList, setDiscardList] = useState<FileInfo[]>([]);
   
   // Navigation State
   const [currentNavPath, setCurrentNavPath] = useState<string | null>(null);
+  const [currentDirs, setCurrentDirs] = useState<DirInfo[]>([]);
+  const [currentFiles, setCurrentFiles] = useState<FileInfo[]>([]);
+  const [topFiles, setTopFiles] = useState<FileInfo[]>([]);
+  const [searchResults, setSearchResults] = useState<FileInfo[]>([]);
 
   useEffect(() => {
     const unlistenDrop = listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
@@ -70,21 +72,53 @@ function App() {
     };
   }, []);
 
+  // Fetch directory content when path changes
+  useEffect(() => {
+    if (currentNavPath) {
+      loadDirectory(currentNavPath);
+    }
+  }, [currentNavPath]);
+
+  // Fetch top files on initial load or summary change
+  useEffect(() => {
+    if (summary) {
+      invoke<FileInfo[]>("get_top_files", { limit: 20 }).then(setTopFiles).catch(console.error);
+    }
+  }, [summary]);
+
+  // Search effect
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchTerm.length > 2) {
+        invoke<FileInfo[]>("search_files", { term: searchTerm, limit: 100 })
+          .then(setSearchResults)
+          .catch(console.error);
+      } else {
+        setSearchResults([]);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  const loadDirectory = async (path: string) => {
+    try {
+      const [dirs, files]: [DirInfo[], FileInfo[]] = await invoke("get_dir_content", { path });
+      setCurrentDirs(dirs);
+      setCurrentFiles(files);
+    } catch (err: any) {
+      setError("Erro ao carregar diretório: " + err.toString());
+    }
+  };
+
   const analyzeWithPath = async (path: string) => {
     if (!path || path === "Arraste o arquivo para a tela") return;
     setLoading(true);
     setError("");
     setDiscardList([]);
     try {
-      const data: AnalysisResult = await invoke("parse_report", { path });
-      setResult(data);
-      // Set initial nav path to the root directory in the report
-      if (data.directories.length > 0) {
-        const roots = data.directories.filter(d => 
-          !data.directories.some(other => d.path !== other.path && d.path.startsWith(other.path + "\\"))
-        );
-        setCurrentNavPath(roots[0]?.path || null);
-      }
+      const data: AnalysisSummary = await invoke("parse_report", { reportPath: path });
+      setSummary(data);
+      setCurrentNavPath(data.root_path);
     } catch (err: any) {
       setError("Erro ao analisar: " + err.toString());
     } finally {
@@ -117,7 +151,7 @@ function App() {
         defaultPath: 'lista_exclusao.txt'
       });
       if (savePath) {
-        const content = discardList.map(f => `${f.parentPath}\\${f.name}`);
+        const content = discardList.map(f => `${f.parent_path}\\${f.name}`);
         await invoke("save_discard_list", { path: savePath, content });
         alert("Lista exportada com sucesso!");
       }
@@ -126,10 +160,10 @@ function App() {
     }
   };
 
-  const addToDiscard = (file: FileInfo, parentPath: string) => {
-    const fileId = `${parentPath}\\${file.name}`;
-    if (!discardList.some(f => `${f.parentPath}\\${f.name}` === fileId)) {
-      setDiscardList([...discardList, { ...file, parentPath }]);
+  const addToDiscard = (file: FileInfo) => {
+    const fileId = `${file.parent_path}\\${file.name}`;
+    if (!discardList.some(f => `${f.parent_path}\\${f.name}` === fileId)) {
+      setDiscardList([...discardList, file]);
     }
   };
 
@@ -143,17 +177,12 @@ function App() {
     return discardList.reduce((sum, file) => sum + file.size_bytes, 0);
   }, [discardList]);
 
-  // Sub-directory Breakdown logic
+  // Sub-directory Breakdown logic for Chart
   const breakdownData = useMemo(() => {
-    if (!result || !currentNavPath) return [];
-    
-    const currentDir = result.directories.find(d => d.path === currentNavPath);
-    if (!currentDir) return [];
-
     const data: any[] = [];
-
-    // Add direct files size
-    const directFilesSize = currentDir.files.reduce((sum, f) => sum + f.size_bytes, 0);
+    
+    // Add direct files size if any
+    const directFilesSize = currentFiles.reduce((sum, f) => sum + f.size_bytes, 0);
     if (directFilesSize > 0) {
       data.push({
         name: "[Arquivos Diretos]",
@@ -162,49 +191,18 @@ function App() {
       });
     }
 
-    // Find immediate sub-directories
-    result.directories.forEach(d => {
-      if (d.path.startsWith(currentNavPath + "\\")) {
-        const relativePath = d.path.substring(currentNavPath.length + 1);
-        if (!relativePath.includes("\\")) {
-          data.push({
-            name: relativePath,
-            value: d.size_bytes,
-            path: d.path,
-            type: 'dir'
-          });
-        }
-      }
+    // Add subdirectories
+    currentDirs.forEach(d => {
+      data.push({
+        name: d.path.split('\\').pop() || d.path,
+        value: d.size_bytes,
+        path: d.path,
+        type: 'dir'
+      });
     });
 
     return data.sort((a, b) => b.value - a.value);
-  }, [result, currentNavPath]);
-
-  const topFiles = useMemo(() => {
-    if (!result) return [];
-    const allFiles: any[] = [];
-    result.directories.forEach(dir => {
-      dir.files.forEach(file => {
-        allFiles.push({ ...file, parentPath: dir.path });
-      });
-    });
-    return allFiles.sort((a, b) => b.size_bytes - a.size_bytes).slice(0, 20);
-  }, [result]);
-
-  const filteredFiles = useMemo(() => {
-    if (!result) return [];
-    const allFiles: any[] = [];
-    result.directories.forEach(dir => {
-      dir.files.forEach(file => {
-        const fileId = `${dir.path}\\${file.name}`;
-        const isDiscarded = discardList.some(f => `${f.parentPath}\\${f.name}` === fileId);
-        if (!isDiscarded && (file.name.toLowerCase().includes(searchTerm.toLowerCase()) || dir.path.toLowerCase().includes(searchTerm.toLowerCase()))) {
-          allFiles.push({ ...file, parentPath: dir.path });
-        }
-      });
-    });
-    return allFiles.sort((a, b) => b.size_bytes - a.size_bytes).slice(0, 100);
-  }, [result, searchTerm, discardList]);
+  }, [currentDirs, currentFiles]);
 
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
@@ -219,10 +217,7 @@ function App() {
     const parts = currentNavPath.split("\\");
     if (parts.length > 1) {
       parts.pop();
-      const parentPath = parts.join("\\");
-      if (result?.directories.some(d => d.path === parentPath)) {
-        setCurrentNavPath(parentPath);
-      }
+      setCurrentNavPath(parts.join("\\"));
     }
   };
 
@@ -264,16 +259,16 @@ function App() {
         </div>
       )}
 
-      {result && (
+      {summary && (
         <main className="dashboard">
           <section className="stats-cards">
             <div className="card">
               <h3>Tamanho Total</h3>
-              <p className="big-stat">{formatBytes(result.total_size_bytes)}</p>
+              <p className="big-stat">{formatBytes(summary.total_size_bytes)}</p>
             </div>
             <div className="card">
-              <h3>Pastas Mapeadas</h3>
-              <p className="big-stat">{result.directories.length}</p>
+              <h3>Itens Mapeados</h3>
+              <p className="small-stat">{summary.total_dirs} pastas / {summary.total_files} arquivos</p>
             </div>
             <div className="card highlight">
               <h3>Espaço a Liberar</h3>
@@ -291,7 +286,7 @@ function App() {
                     <span>{currentNavPath}</span>
                   </div>
                 </div>
-                <h3>Explorador de Subdiretórios</h3>
+                <h3>Explorador Hierárquico</h3>
               </div>
               
               <div className="explorer-content">
@@ -321,7 +316,7 @@ function App() {
                 </div>
                 
                 <div className="explorer-list">
-                  <h4>Conteúdo de {currentNavPath?.split('\\').pop()}</h4>
+                  <h4>Conteúdo Local</h4>
                   <div className="mini-list">
                     {breakdownData.map((item, i) => (
                       <div key={i} className={`mini-item ${item.type}`} onClick={() => item.type === 'dir' && setCurrentNavPath(item.path)}>
@@ -339,7 +334,7 @@ function App() {
 
           <section className="charts-grid">
             <div className="card chart-card">
-              <h3>Maiores Arquivos (Top 10)</h3>
+              <h3>Maiores Arquivos (Global)</h3>
               <div className="chart-wrapper">
                 <ResponsiveContainer width="100%" height={250}>
                   <BarChart data={topFiles.slice(0, 10)} layout="vertical">
@@ -360,12 +355,12 @@ function App() {
 
           <section className="file-list-section">
             <div className="list-header">
-              <h3>Busca Geral de Arquivos</h3>
+              <h3>Busca Instantânea em Bilhões de Itens</h3>
               <div className="search-box">
                 <Search size={18} />
                 <input 
                   type="text" 
-                  placeholder="Filtrar arquivos ou caminhos..." 
+                  placeholder="Pesquisar por nome ou caminho..." 
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
@@ -382,13 +377,13 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredFiles.map((file, i) => (
+                  {(searchTerm.length > 2 ? searchResults : currentFiles).map((file, i) => (
                     <tr key={i}>
                       <td title={file.name}><FileText size={14} className="icon" /> {file.name.length > 50 ? file.name.substring(0, 50) + '...' : file.name}</td>
                       <td>{file.size_str}</td>
-                      <td title={file.parentPath}><Folder size={14} className="icon" /> {file.parentPath.split('\\').pop()}</td>
+                      <td title={file.parent_path}><Folder size={14} className="icon" /> {file.parent_path.split('\\').pop()}</td>
                       <td>
-                        <button className="delete-btn" onClick={() => addToDiscard(file, file.parentPath)} title="Mover para lista de descarte">
+                        <button className="delete-btn" onClick={() => addToDiscard(file)} title="Mover para lista de descarte">
                           <Trash2 size={14} />
                         </button>
                       </td>
@@ -422,7 +417,7 @@ function App() {
                       <tr key={i}>
                         <td>{file.name}</td>
                         <td>{file.size_str}</td>
-                        <td className="dimmed">{file.parentPath}</td>
+                        <td className="dimmed">{file.parent_path}</td>
                         <td>
                           <button className="undo-btn" onClick={() => removeFromDiscard(i)}>
                             <X size={14} />
