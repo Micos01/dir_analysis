@@ -24,4 +24,6 @@ tauri-plugin-dialog = "2"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 tempfile = "3.10"
 once_cell = "1.19"
+memchr = "2.7"
+memmap2 = "0.9"
 

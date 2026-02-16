@@ -2,47 +2,43 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-   Cell, 
-} from 'recharts';
-import { Folder, FileText, HardDrive, AlertCircle, Search, Trash2, UploadCloud, FolderSearch, X, Download, ChevronRight, ChevronLeft, Loader2, Clock, Zap } from 'lucide-react';
-import "./App.css";
+import { AlertCircle } from 'lucide-react';
 
-interface FileInfo {
-  name: string;
-  size_bytes: number;
-  size_str: string;
-  parent_path: string;
-}
+// Types & Utils
+import { FileInfo, DirInfo, AnalysisSummary, ProgressEvent } from "./types";
+import { formatBytes, formatTime } from "./utils";
 
-interface DirInfo {
-  path: string;
-  size_bytes: number;
-  size_str: string;
-}
-
-interface AnalysisSummary {
-  total_size_bytes: number;
-  total_dirs: number;
-  total_files: number;
-  root_path: string;
-}
-
-interface ProgressEvent {
-  count: number;
-  status: string;
-}
+// Components
+import { Header } from "./components/layout/Header";
+import { StatsCards } from "./components/dashboard/StatsCards";
+import { Explorer } from "./components/dashboard/Explorer";
+import { ChartsGrid } from "./components/dashboard/ChartsGrid";
+import { FileList } from "./components/dashboard/FileList";
+import { DiscardSection } from "./components/dashboard/DiscardSection";
+import { LoadingOverlay } from "./components/ui/LoadingOverlay";
+import { DragOverlay } from "./components/ui/DragOverlay";
 
 const CustomTooltip = ({ active, payload, label, formatBytes }: any) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
       <div className="custom-tooltip">
-        <p className="label">{`${label}`}</p>
-        <p className="size">{`Tamanho: ${formatBytes(data.value || data.size_bytes)}`}</p>
-        {data.type && <p className="type">{`Tipo: ${data.type === 'dir' ? 'Pasta' : 'Arquivos Diretos'}`}</p>}
-        {data.parent_path && <p className="path">{`Local: ${data.parent_path}`}</p>}
+        <p className="mb-2 text-sm font-bold text-white">{label}</p>
+        <div className="space-y-1">
+          <p className="text-xs text-blue-400">
+            <span className="text-slate-500">Tamanho:</span> {formatBytes(data.value || data.size_bytes)}
+          </p>
+          {data.type && (
+            <p className="text-xs text-emerald-400">
+              <span className="text-slate-500">Tipo:</span> {data.type === 'dir' ? 'Pasta' : 'Arquivos Diretos'}
+            </p>
+          )}
+          {data.parent_path && (
+            <p className="text-[10px] text-slate-400 leading-tight pt-1 border-t border-slate-700 mt-1">
+              {data.parent_path}
+            </p>
+          )}
+        </div>
       </div>
     );
   }
@@ -60,12 +56,10 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [discardList, setDiscardList] = useState<FileInfo[]>([]);
   
-  // Progress State
   const [progress, setProgress] = useState<ProgressEvent>({ count: 0, status: "Iniciando..." });
   const [elapsedTime, setElapsedTime] = useState(0);
   const timerRef = useRef<number | null>(null);
 
-  // Navigation State
   const [currentNavPath, setCurrentNavPath] = useState<string | null>(null);
   const [currentDirs, setCurrentDirs] = useState<DirInfo[]>([]);
   const [currentFiles, setCurrentFiles] = useState<FileInfo[]>([]);
@@ -73,53 +67,49 @@ function App() {
   const [searchResults, setSearchResults] = useState<FileInfo[]>([]);
 
   useEffect(() => {
-    const unlistenDrop = listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
-      setIsDragging(false);
-      const paths = event.payload.paths;
-      if (paths.length > 0) {
-        const path = paths[0];
-        if (path.endsWith(".txt")) {
-          setFilePath(path);
-          analyzeWithPath(path);
-        } else {
-          setError("Por favor, solte um arquivo .txt");
+    const setupListeners = async () => {
+      const unlistenDrop = await listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+        setIsDragging(false);
+        const paths = event.payload.paths;
+        if (paths.length > 0) {
+          const path = paths[0];
+          if (path.endsWith(".txt")) {
+            setFilePath(path);
+            analyzeWithPath(path);
+          } else {
+            setError("Por favor, solte um arquivo .txt");
+          }
         }
-      }
-    });
+      });
 
-    const unlistenEnter = listen("tauri://drag-enter", () => setIsDragging(true));
-    const unlistenLeave = listen("tauri://drag-leave", () => setIsDragging(false));
+      const unlistenEnter = await listen("tauri://drag-enter", () => setIsDragging(true));
+      const unlistenLeave = await listen("tauri://drag-leave", () => setIsDragging(false));
+      const unlistenProgress = await listen<ProgressEvent>("processing-progress", (event) => setProgress(event.payload));
 
-    const unlistenProgress = listen<ProgressEvent>("processing-progress", (event) => {
-      setProgress(event.payload);
-    });
-
-    return () => {
-      unlistenDrop.then(f => f());
-      unlistenEnter.then(f => f());
-      unlistenLeave.then(f => f());
-      unlistenProgress.then(f => f());
+      return () => {
+        unlistenDrop();
+        unlistenEnter();
+        unlistenLeave();
+        unlistenProgress();
+      };
     };
+
+    const cleanup = setupListeners();
+    return () => { cleanup.then(f => f && f()); };
   }, []);
 
   useEffect(() => {
-    if (currentNavPath) {
-      loadDirectory(currentNavPath);
-    }
+    if (currentNavPath) loadDirectory(currentNavPath);
   }, [currentNavPath]);
 
   useEffect(() => {
-    if (summary) {
-      invoke<FileInfo[]>("get_top_files", { limit: 20 }).then(setTopFiles).catch(console.error);
-    }
+    if (summary) invoke<FileInfo[]>("get_top_files", { limit: 20 }).then(setTopFiles).catch(console.error);
   }, [summary]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
       if (searchTerm.length > 2) {
-        invoke<FileInfo[]>("search_files", { term: searchTerm, limit: 100 })
-          .then(setSearchResults)
-          .catch(console.error);
+        invoke<FileInfo[]>("search_files", { term: searchTerm, limit: 100 }).then(setSearchResults).catch(console.error);
       } else {
         setSearchResults([]);
       }
@@ -129,16 +119,12 @@ function App() {
 
   const startTimer = () => {
     setElapsedTime(0);
-    timerRef.current = window.setInterval(() => {
-      setElapsedTime(prev => prev + 1);
-    }, 1000);
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = window.setInterval(() => setElapsedTime(prev => prev + 1), 1000);
   };
 
   const stopTimer = () => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   };
 
   const loadDirectory = async (path: string) => {
@@ -170,14 +156,6 @@ function App() {
       stopTimer();
     }
   };
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const analyze = () => analyzeWithPath(filePath);
 
   const selectFile = async () => {
     try {
@@ -224,30 +202,6 @@ function App() {
     setDiscardList(newList);
   };
 
-  const totalDiscardSize = useMemo(() => {
-    return discardList.reduce((sum, file) => sum + file.size_bytes, 0);
-  }, [discardList]);
-
-  const breakdownData = useMemo(() => {
-    const data: any[] = [];
-    const directFilesSize = currentFiles.reduce((sum, f) => sum + f.size_bytes, 0);
-    if (directFilesSize > 0) {
-      data.push({ name: "[Arquivos Diretos]", value: directFilesSize, type: 'files' });
-    }
-    currentDirs.forEach(d => {
-      data.push({ name: d.path.split('\\').pop() || d.path, value: d.size_bytes, path: d.path, type: 'dir' });
-    });
-    return data.sort((a, b) => b.value - a.value);
-  }, [currentDirs, currentFiles]);
-
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
   const goBack = () => {
     if (!currentNavPath) return;
     const parts = currentNavPath.split("\\");
@@ -257,267 +211,83 @@ function App() {
     }
   };
 
+  const totalDiscardSize = useMemo(() => discardList.reduce((sum, file) => sum + file.size_bytes, 0), [discardList]);
+
+  const breakdownData = useMemo(() => {
+    const data: any[] = [];
+    const directFilesSize = currentFiles.reduce((sum, f) => sum + f.size_bytes, 0);
+    if (directFilesSize > 0) data.push({ name: "[Arquivos Diretos]", value: directFilesSize, type: 'files' });
+    currentDirs.forEach(d => {
+      data.push({ name: d.path.split('\\').pop() || d.path, value: d.size_bytes, path: d.path, type: 'dir' });
+    });
+    return data.sort((a, b) => b.value - a.value);
+  }, [currentDirs, currentFiles]);
+
   return (
-    <div className={`app-container ${isDragging ? 'dragging' : ''}`}>
-      {isDragging && (
-        <div className="drag-overlay">
-          <div className="drag-content">
-            <UploadCloud size={64} />
-            <h2>Solte o Relatório Aqui</h2>
-            <p>Apenas arquivos .txt são suportados</p>
-          </div>
-        </div>
-      )}
-
+    <div className={`min-h-screen p-6 transition-opacity duration-300 ${isDragging ? 'opacity-40' : 'opacity-100'}`}>
+      {isDragging && <DragOverlay />}
+      
       {loading && (
-        <div className="loading-overlay">
-          <div className="loading-card">
-            <Loader2 size={48} className="spinner" />
-            <h2>Processando Relatório</h2>
-            <p className="status-text">{progress.status}</p>
-            
-            <div className="loading-stats">
-              <div className="stat-item">
-                <Clock size={18} />
-                <span>Tempo: {formatTime(elapsedTime)}</span>
-              </div>
-              {progress.count > 0 && (
-                <div className="stat-item">
-                  <Zap size={18} />
-                  <span>Registros: {(progress.count / 1000000).toFixed(1)}M</span>
-                </div>
-              )}
-            </div>
-            
-            <div className="progress-hint">
-              Esta operação pode levar alguns minutos para arquivos de grande escala.
-            </div>
-          </div>
-        </div>
+        <LoadingOverlay 
+          progress={progress} 
+          elapsedTime={elapsedTime} 
+          formatTime={formatTime} 
+        />
       )}
 
-      <header className="header">
-        <h1><HardDrive size={24} /> Análise de Diretórios</h1>
-        <div className="input-group">
-          <div className="input-wrapper">
-            <input
-              type="text"
-              value={filePath}
-              onChange={(e) => setFilePath(e.target.value)}
-              placeholder="Caminho para o relatório.txt"
-            />
-            <button className="browse-btn" onClick={selectFile} title="Selecionar Arquivo">
-              <FolderSearch size={20} />
-            </button>
-          </div>
-          <button className="analyze-btn" onClick={analyze} disabled={loading}>
-            {loading ? "Analisando..." : "Analisar"}
-          </button>
-        </div>
-      </header>
+      <Header 
+        filePath={filePath} 
+        setFilePath={setFilePath} 
+        selectFile={selectFile} 
+        analyze={() => analyzeWithPath(filePath)} 
+        loading={loading} 
+      />
 
       {error && (
-        <div className="error-banner">
-          <AlertCircle size={20} />
-          <span>{error}</span>
+        <div className="flex items-center gap-3 p-4 mb-8 border border-red-500/50 bg-red-500/10 text-red-200 rounded-2xl animate-in slide-in-from-top-4">
+          <AlertCircle size={20} className="shrink-0" />
+          <span className="text-sm font-medium">{error}</span>
         </div>
       )}
 
       {summary && (
-        <main className="dashboard">
-          <section className="stats-cards">
-            <div className="card">
-              <h3>Tamanho Total</h3>
-              <p className="big-stat">{formatBytes(summary.total_size_bytes)}</p>
-            </div>
-            <div className="card">
-              <h3>Itens Mapeados</h3>
-              <p className="small-stat">{summary.total_dirs.toLocaleString()} pastas / {summary.total_files.toLocaleString()} arquivos</p>
-            </div>
-            <div className="card highlight">
-              <h3>Espaço a Liberar</h3>
-              <p className="big-stat warning">{formatBytes(totalDiscardSize)}</p>
-            </div>
-          </section>
+        <main className="flex flex-col gap-10 max-w-[1400px] mx-auto animate-in fade-in duration-700">
+          <StatsCards 
+            summary={summary} 
+            totalDiscardSize={totalDiscardSize} 
+            formatBytes={formatBytes} 
+          />
 
-          <section className="explorer-section">
-            <div className="card explorer-card">
-              <div className="explorer-header">
-                <div className="path-nav">
-                  <button onClick={goBack} className="back-btn"><ChevronLeft size={18} /></button>
-                  <div className="current-path-display">
-                    <Folder size={16} className="icon" />
-                    <span>{currentNavPath}</span>
-                  </div>
-                </div>
-                <h3>Explorador Hierárquico</h3>
-              </div>
-              
-              <div className="explorer-content">
-                <div className="explorer-chart">
-                  <ResponsiveContainer width="100%" height={350}>
-                    <BarChart 
-                      data={breakdownData} 
-                      layout="vertical" 
-                      margin={{ left: 20, right: 30, top: 10, bottom: 10 }}
-                      onClick={(data: any) => {
-                        if (data && data.activePayload && data.activePayload[0].payload.type === 'dir') {
-                          setCurrentNavPath(data.activePayload[0].payload.path);
-                        }
-                      }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#334155" />
-                      <XAxis type="number" tickFormatter={(v) => formatBytes(v)} hide />
-                      <YAxis 
-                        dataKey="name" 
-                        type="category" 
-                        width={120} 
-                        tick={{fontSize: 11, fill: '#94a3b8'}}
-                        axisLine={false}
-                        tickLine={false}
-                      />
-                      <Tooltip content={<CustomTooltip formatBytes={formatBytes} />} />
-                      <Bar dataKey="value" radius={[0, 4, 4, 0]}>
-                        {breakdownData.map((entry, index) => (
-                          <Cell 
-                            key={`cell-${index}`} 
-                            fill={entry.type === 'files' ? '#64748b' : COLORS[index % COLORS.length]} 
-                            cursor={entry.type === 'dir' ? 'pointer' : 'default'}
-                            fillOpacity={0.8}
-                          />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-                
-                <div className="explorer-list">
-                  <h4>Conteúdo Local</h4>
-                  <div className="mini-list">
-                    {breakdownData.map((item, i) => (
-                      <div key={i} className={`mini-item ${item.type}`} onClick={() => item.type === 'dir' && setCurrentNavPath(item.path)}>
-                        {item.type === 'dir' ? <Folder size={14} className="folder-icon" /> : <FileText size={14} className="file-icon" />}
-                        <span className="name">{item.name}</span>
-                        <span className="size">{formatBytes(item.value)}</span>
-                        {item.type === 'dir' && <ChevronRight size={14} className="arrow" />}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
+          <Explorer 
+            currentNavPath={currentNavPath} 
+            goBack={goBack} 
+            breakdownData={breakdownData} 
+            setCurrentNavPath={setCurrentNavPath} 
+            formatBytes={formatBytes} 
+            CustomTooltip={CustomTooltip} 
+            COLORS={COLORS} 
+          />
 
-          <section className="charts-grid">
-            <div className="card chart-card">
-              <h3>Maiores Arquivos (Global)</h3>
-              <div className="chart-wrapper">
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={topFiles.slice(0, 10)} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
-                    <XAxis type="number" hide />
-                    <YAxis 
-                      dataKey="name" 
-                      type="category" 
-                      width={100} 
-                      tick={{fontSize: 10, fill: '#94a3b8'}}
-                      tickFormatter={(name) => name.length > 15 ? name.substring(0, 12) + '...' : name}
-                    />
-                    <Tooltip content={<CustomTooltip formatBytes={formatBytes} />} />
-                    <Bar dataKey="size_bytes" radius={[0, 4, 4, 0]}>
-                      {topFiles.slice(0, 10).map((_entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} fillOpacity={0.7} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </section>
+          <ChartsGrid 
+            topFiles={topFiles} 
+            COLORS={COLORS} 
+            CustomTooltip={CustomTooltip} 
+            formatBytes={formatBytes} 
+          />
 
-          <section className="file-list-section">
-            <div className="list-header">
-              <h3>Busca e Detalhes</h3>
-              <div className="search-box">
-                <Search size={18} />
-                <input 
-                  type="text" 
-                  placeholder="Pesquisar..." 
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-              </div>
-            </div>
-            <div className="card list-card">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Nome do Arquivo</th>
-                    <th>Tamanho</th>
-                    <th>Diretório</th>
-                    <th>Ação</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(searchTerm.length > 2 ? searchResults : currentFiles).map((file, i) => (
-                    <tr key={i}>
-                      <td className="file-cell">
-                        <FileText size={14} className="icon" /> 
-                        <span className="truncate">{file.name}</span>
-                      </td>
-                      <td className="size-cell">{file.size_str}</td>
-                      <td className="path-cell">
-                        <Folder size={14} className="icon" /> 
-                        <span className="truncate">{file.parent_path.split('\\').pop()}</span>
-                      </td>
-                      <td className="action-cell">
-                        <button className="delete-btn" onClick={() => addToDiscard(file)}>
-                          <Trash2 size={14} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
+          <FileList 
+            searchTerm={searchTerm} 
+            setSearchTerm={setSearchTerm} 
+            searchResults={searchResults} 
+            currentFiles={currentFiles} 
+            addToDiscard={addToDiscard} 
+          />
 
-          {discardList.length > 0 && (
-            <section className="discard-section">
-              <div className="list-header">
-                <h3><Trash2 size={20} /> Plano de Limpeza ({discardList.length})</h3>
-                <button className="confirm-btn" onClick={exportDiscardList}>
-                  <Download size={18} /> Exportar Lista .txt
-                </button>
-              </div>
-              <div className="card discard-card">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Arquivo</th>
-                      <th>Tamanho</th>
-                      <th>Localização</th>
-                      <th>Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {discardList.map((file, i) => (
-                      <tr key={i}>
-                        <td className="file-cell">{file.name}</td>
-                        <td className="size-cell">{file.size_str}</td>
-                        <td className="dimmed">{file.parent_path}</td>
-                        <td className="action-cell">
-                          <button className="undo-btn" onClick={() => removeFromDiscard(i)}>
-                            <X size={14} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          )}
+          <DiscardSection 
+            discardList={discardList} 
+            exportDiscardList={exportDiscardList} 
+            removeFromDiscard={removeFromDiscard} 
+          />
         </main>
       )}
     </div>
