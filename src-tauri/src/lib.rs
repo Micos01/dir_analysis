@@ -59,7 +59,7 @@ fn parse_size(size_str: &str) -> i64 {
 }
 
 #[tauri::command]
-pub async fn parse_report(report_path: String) -> Result<AnalysisSummary, String> {
+async fn parse_report(report_path: String) -> Result<AnalysisSummary, String> {
     let path_obj = Path::new(&report_path);
     if !path_obj.exists() {
         return Err(format!("Arquivo nao encontrado: {}", report_path));
@@ -155,7 +155,7 @@ pub async fn parse_report(report_path: String) -> Result<AnalysisSummary, String
 }
 
 #[tauri::command]
-pub async fn get_dir_content(path: String) -> Result<(Vec<DirInfo>, Vec<FileInfo>), String> {
+async fn get_dir_content(path: String) -> Result<(Vec<DirInfo>, Vec<FileInfo>), String> {
     let db_opt = DB_PATH.lock().unwrap();
     let db_path = db_opt.as_ref().ok_or("Nenhum relatorio carregado")?;
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
@@ -204,7 +204,7 @@ pub async fn get_dir_content(path: String) -> Result<(Vec<DirInfo>, Vec<FileInfo
 }
 
 #[tauri::command]
-pub async fn search_files(term: String, limit: i64) -> Result<Vec<FileInfo>, String> {
+async fn search_files(term: String, limit: i64) -> Result<Vec<FileInfo>, String> {
     let db_opt = DB_PATH.lock().unwrap();
     let db_path = db_opt.as_ref().ok_or("Nenhum relatorio carregado")?;
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
@@ -235,7 +235,7 @@ pub async fn search_files(term: String, limit: i64) -> Result<Vec<FileInfo>, Str
 }
 
 #[tauri::command]
-pub async fn get_top_files(limit: i64) -> Result<Vec<FileInfo>, String> {
+async fn get_top_files(limit: i64) -> Result<Vec<FileInfo>, String> {
     let db_opt = DB_PATH.lock().unwrap();
     let db_path = db_opt.as_ref().ok_or("Nenhum relatorio carregado")?;
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
@@ -264,7 +264,7 @@ pub async fn get_top_files(limit: i64) -> Result<Vec<FileInfo>, String> {
 }
 
 #[tauri::command]
-pub async fn save_discard_list(path: String, content: Vec<String>) -> Result<(), String> {
+async fn save_discard_list(path: String, content: Vec<String>) -> Result<(), String> {
     let mut file = File::create(Path::new(&path)).map_err(|e| e.to_string())?;
     for line in content {
         writeln!(file, "{}", line).map_err(|e| e.to_string())?;

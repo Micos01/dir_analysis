@@ -84,9 +84,3 @@
 
   ---
 
-
-  Sugestões Adicionais para o seu README:
-   1. Screenshots: Adicione imagens da interface (Dashboard, Gráficos).
-   2. Licença: Se o projeto for aberto, adicione uma seção de licença (Ex: MIT).
-   3. Download: Se você fizer o build, coloque um link para baixar o .exe ou .msi.
-
