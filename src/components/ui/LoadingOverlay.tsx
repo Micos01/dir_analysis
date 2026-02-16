@@ -44,7 +44,7 @@ export function LoadingOverlay({ progress, elapsedTime, formatTime }: LoadingOve
         </div>
         
         <div className="text-[10px] text-slate-600 font-medium px-8 leading-relaxed">
-          Otimizado com Memory Mapping e SIMD para performance máxima em arquivos de larga escala.
+          Memory Mapping e SIMD .
         </div>
       </div>
     </div>
